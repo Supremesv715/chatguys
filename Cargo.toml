@@ -1,0 +1,12 @@
+[package]
+name = "chat_guys"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version="1", features = ["full"]}
+tokio-tungstenite = "0.17"
+tungstenite = "0.15"
+futures = "0.3"
+futures-util = "0.3.31"
+io = "0.0.2"
