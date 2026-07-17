@@ -18,7 +18,6 @@ pub async fn start_client() -> Result<(), Box<dyn Error>> {
     
     let (mut write, mut read) = ws_stream.split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-    let message = Arc::new(Mutex::new(Vec::new()));
     
     tokio::spawn({
         async move {
@@ -30,16 +29,35 @@ pub async fn start_client() -> Result<(), Box<dyn Error>> {
         }
     });
 
-    let value = message.clone();
     tokio::spawn({
-        let message = message.clone();
         async move {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Text(text)) => {
-                        let mut msgs = message.lock().await;
-                        if !text.starts_with("Room_MSG:") {
-                            msgs.push(text.clone());
+                        if let Some(rest) = text.strip_prefix("ROOM_LIST:") {
+                            if rest.trim().is_empty() {
+                                println!("Available rooms: none");
+                            } else {
+                                println!("Available rooms: {}", rest.replace(',', ", "));
+                            }
+                        } else if let Some(rest) = text.strip_prefix("ROOM_USERS:") {
+                            let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                            if parts.len() == 2 {
+                                let room_name = parts[0];
+                                let users = parts[1];
+                                if users.trim().is_empty() {
+                                    println!("Users in {}: none", room_name);
+                                } else {
+                                    println!("Users in {}: {}", room_name, users.replace(',', ", "));
+                                }
+                            } else {
+                                println!("{}", text);
+                            }
+                        } else if let Some(room) = text.strip_prefix("JOINED:") {
+                            println!("You joined room: {}", room);
+                        } else if let Some(room) = text.strip_prefix("LEFT_ROOM:") {
+                            println!("Server confirmed you left room: {}", room);
+                        } else if !text.starts_with("Room_MSG:") {
                             println!("{}", text);
                         }
                     }
@@ -62,9 +80,8 @@ pub async fn start_client() -> Result<(), Box<dyn Error>> {
     stdin().read_line(&mut username)?;
     let username = username.trim().to_string();
     
-    println!("Do you want to create a room or join a room?");
-    println!("Type 'CREATE <ROOM_NAME>' to create a room");
-    println!("Type 'JOIN <ROOM_NAME>' to join a room");
+    println!("Commands: /help, /rooms, /leave");
+    println!("Use CREATE <ROOM_NAME> or JOIN <ROOM_NAME> to enter a room");
     
     let mut current_room = String::new();
     loop {
@@ -75,30 +92,32 @@ pub async fn start_client() -> Result<(), Box<dyn Error>> {
         let input = input.trim();
         
         if input.starts_with("CREATE ") {
-            current_room = input[7..].to_string();
-            tx.send(Message::Text(format!("CREATE_ROOM:{}", current_room)))
+            current_room = input[7..].trim().to_string();
+            tx.send(Message::Text(format!("CREATE_ROOM:{}:{}", current_room, username)))
                 .expect("Failed to send message");
-            println!("You created and joined room: {}", current_room);
             break;
         } else if input.starts_with("JOIN ") {
-            current_room = input[5..].to_string();
-            tx.send(Message::Text(format!("CREATE_ROOM:{}", current_room)))
+            current_room = input[5..].trim().to_string();
+            tx.send(Message::Text(format!("JOIN_ROOM:{}:{}", current_room, username)))
                 .expect("Failed to send message");
-            println!("You joined room: {}", current_room);
-            
-            let msgs = value.lock().await;
-            println!("------ Previous Messages ------");
-            for msg in msgs.iter() {
-                println!("{}", msg);
-            }
-            println!("-------------------------------");
             break;
+        } else if input == "/help" {
+            println!("/help   show commands");
+            println!("/rooms  list available rooms");
+            println!("/leave  leave the current room");
+        } else if input == "/rooms" {
+            tx.send(Message::Text("LIST_ROOMS".to_string()))
+                .expect("Failed to send message");
+        } else if input == "/leave" {
+            println!("Join or create a room first, then /leave works inside the room.");
         } else {
-            println!("Invalid command. Please type 'CREATE <ROOM_NAME>' or 'JOIN <ROOM_NAME>'.");
+            println!("Invalid command. Use CREATE, JOIN, /help, or /rooms.");
         }
     }
     
     println!("You can chat in room: {}", current_room);
+    tx.send(Message::Text("ROOM_USERS".to_string()))
+        .expect("Failed to send message");
     loop {
         print!("{} > ", username);
         stdout().flush()?;
@@ -106,7 +125,20 @@ pub async fn start_client() -> Result<(), Box<dyn Error>> {
         stdin().read_line(&mut message)?;
         let message = message.trim();
         
-        if message == "leave" {
+        if message == "/help" {
+            println!("/help   show commands");
+            println!("/rooms  list available rooms");
+            println!("/leave  leave the current room");
+            continue;
+        }
+
+        if message == "/rooms" {
+            tx.send(Message::Text("LIST_ROOMS".to_string()))
+                .expect("Failed to send message");
+            continue;
+        }
+
+        if message == "/leave" {
             tx.send(Message::Text(format!("leave_room: {}", current_room)))
                 .expect("Failed to send message");
             println!("You left the room");
